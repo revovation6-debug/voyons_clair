@@ -1,7 +1,10 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { serveStatic } from 'hono/cloudflare-workers'
+import { setCookie } from 'hono/cookie'
 import type { Bindings } from './types'
+import { hashPassword, verifyPassword, createSession, getSessionFromCookie } from './auth'
+import { loginPage, registerPage } from './pages'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -306,9 +309,189 @@ app.get('/api/reviews', async (c) => {
   }
 })
 
-// Plus de routes à venir...
-app.get('/login', (c) => c.html('<h1>Page de connexion - En construction</h1>'))
-app.get('/register', (c) => c.html('<h1>Page d\'inscription - En construction</h1>'))
+// ============================================
+// PAGES D'AUTHENTIFICATION
+// ============================================
+app.get('/login', (c) => c.html(loginPage))
+app.get('/register', (c) => c.html(registerPage))
+
+// ============================================
+// API AUTHENTIFICATION
+// ============================================
+
+// API - Inscription client
+app.post('/api/auth/register', async (c) => {
+  const { DB } = c.env
+  
+  try {
+    const body = await c.req.json()
+    const { prenom, nom, email, telephone, password } = body
+    
+    // Vérifier si l'email existe déjà
+    const existing = await DB.prepare('SELECT id FROM users WHERE email = ?')
+      .bind(email)
+      .first()
+    
+    if (existing) {
+      return c.json({ error: 'Cet email est déjà utilisé' }, 400)
+    }
+    
+    // Hasher le mot de passe (simple pour MVP, utilisez bcrypt en production)
+    const hashedPassword = hashPassword(password)
+    
+    // Insérer le nouvel utilisateur
+    const result = await DB.prepare(`
+      INSERT INTO users (email, password, nom, prenom, telephone)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(email, hashedPassword, nom, prenom, telephone || null).run()
+    
+    return c.json({ 
+      success: true, 
+      message: 'Inscription réussie',
+      userId: result.meta.last_row_id 
+    })
+  } catch (error) {
+    console.error('Registration error:', error)
+    return c.json({ error: 'Erreur lors de l\'inscription' }, 500)
+  }
+})
+
+// API - Connexion
+app.post('/api/auth/login', async (c) => {
+  const { DB } = c.env
+  
+  try {
+    const body = await c.req.json()
+    const { userType, email, password } = body
+    
+    let table = ''
+    let redirectPath = ''
+    
+    // Déterminer la table à interroger
+    if (userType === 'admin') {
+      table = 'admins'
+      redirectPath = '/admin/dashboard'
+    } else if (userType === 'agent') {
+      table = 'agents'
+      redirectPath = '/agent/dashboard'
+    } else {
+      table = 'users'
+      redirectPath = '/client/dashboard'
+    }
+    
+    // Récupérer l'utilisateur
+    const user = await DB.prepare(`SELECT * FROM ${table} WHERE email = ?`)
+      .bind(email)
+      .first()
+    
+    if (!user) {
+      return c.json({ error: 'Email ou mot de passe incorrect' }, 401)
+    }
+    
+    // Vérifier le mot de passe
+    if (!verifyPassword(password, user.password as string)) {
+      return c.json({ error: 'Email ou mot de passe incorrect' }, 401)
+    }
+    
+    // Mettre à jour last_login
+    await DB.prepare(`UPDATE ${table} SET last_login = datetime('now') WHERE id = ?`)
+      .bind(user.id)
+      .run()
+    
+    // Si c'est un agent, mettre à jour is_online
+    if (userType === 'agent') {
+      await DB.prepare('UPDATE agents SET is_online = 1 WHERE id = ?')
+        .bind(user.id)
+        .run()
+    }
+    
+    // Créer une session
+    const sessionToken = createSession(user.id as number, userType as any, email)
+    
+    // Créer un cookie de session
+    setCookie(c, 'session', sessionToken, {
+      path: '/',
+      httpOnly: true,
+      maxAge: 86400, // 24 heures
+      sameSite: 'Lax'
+    })
+    
+    return c.json({ 
+      success: true,
+      redirectPath,
+      user: {
+        id: user.id,
+        email: user.email,
+        nom: user.nom,
+        prenom: user.prenom,
+        userType
+      }
+    })
+  } catch (error) {
+    console.error('Login error:', error)
+    return c.json({ error: 'Erreur lors de la connexion' }, 500)
+  }
+})
+
+// API - Déconnexion
+app.post('/api/auth/logout', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  // Si c'est un agent, mettre is_online à 0
+  if (session && session.userType === 'agent') {
+    try {
+      await DB.prepare('UPDATE agents SET is_online = 0 WHERE id = ?')
+        .bind(session.userId)
+        .run()
+    } catch (error) {
+      console.error('Error updating agent status:', error)
+    }
+  }
+  
+  // Supprimer le cookie
+  setCookie(c, 'session', '', {
+    path: '/',
+    maxAge: 0
+  })
+  
+  return c.json({ success: true })
+})
+
+// ============================================
+// DASHBOARDS (à développer)
+// ============================================
+app.get('/admin/dashboard', (c) => {
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session || session.userType !== 'admin') {
+    return c.redirect('/login')
+  }
+  
+  return c.html('<h1>Dashboard Admin - En construction</h1><a href="/">Accueil</a>')
+})
+
+app.get('/agent/dashboard', (c) => {
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session || session.userType !== 'agent') {
+    return c.redirect('/login')
+  }
+  
+  return c.html('<h1>Dashboard Voyant - En construction</h1><a href="/">Accueil</a>')
+})
+
+app.get('/client/dashboard', (c) => {
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session || session.userType !== 'user') {
+    return c.redirect('/login')
+  }
+  
+  return c.html('<h1>Dashboard Client - En construction</h1><a href="/">Accueil</a>')
+})
+
+// Pages légales
 app.get('/contact', (c) => c.html('<h1>Page de contact - En construction</h1>'))
 app.get('/confidentialite', (c) => c.html('<h1>Politique de confidentialité - En construction</h1>'))
 app.get('/cgv', (c) => c.html('<h1>Conditions générales - En construction</h1>'))

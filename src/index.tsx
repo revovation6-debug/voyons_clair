@@ -5,6 +5,7 @@ import { setCookie } from 'hono/cookie'
 import type { Bindings } from './types'
 import { hashPassword, verifyPassword, createSession, getSessionFromCookie } from './auth'
 import { loginPage, registerPage } from './pages'
+import { adminDashboard, agentDashboard, clientDashboard } from './dashboards'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -459,36 +460,366 @@ app.post('/api/auth/logout', async (c) => {
 })
 
 // ============================================
-// DASHBOARDS (à développer)
+// DASHBOARDS
 // ============================================
-app.get('/admin/dashboard', (c) => {
+app.get('/admin/dashboard', async (c) => {
+  const { DB } = c.env
   const session = getSessionFromCookie(c.req.header('cookie'))
   
   if (!session || session.userType !== 'admin') {
     return c.redirect('/login')
   }
   
-  return c.html('<h1>Dashboard Admin - En construction</h1><a href="/">Accueil</a>')
+  // Récupérer les données de l'admin
+  const admin = await DB.prepare('SELECT * FROM admins WHERE id = ?')
+    .bind(session.userId)
+    .first()
+  
+  return c.html(adminDashboard(admin))
 })
 
-app.get('/agent/dashboard', (c) => {
+app.get('/agent/dashboard', async (c) => {
+  const { DB } = c.env
   const session = getSessionFromCookie(c.req.header('cookie'))
   
   if (!session || session.userType !== 'agent') {
     return c.redirect('/login')
   }
   
-  return c.html('<h1>Dashboard Voyant - En construction</h1><a href="/">Accueil</a>')
+  const agent = await DB.prepare('SELECT * FROM agents WHERE id = ?')
+    .bind(session.userId)
+    .first()
+  
+  return c.html(agentDashboard(agent))
 })
 
-app.get('/client/dashboard', (c) => {
+app.get('/client/dashboard', async (c) => {
+  const { DB } = c.env
   const session = getSessionFromCookie(c.req.header('cookie'))
   
   if (!session || session.userType !== 'user') {
     return c.redirect('/login')
   }
   
-  return c.html('<h1>Dashboard Client - En construction</h1><a href="/">Accueil</a>')
+  const user = await DB.prepare('SELECT * FROM users WHERE id = ?')
+    .bind(session.userId)
+    .first()
+  
+  return c.html(clientDashboard(user))
+})
+
+// ============================================
+// API ADMIN
+// ============================================
+
+// API - Statistiques admin
+app.get('/api/admin/stats', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session || session.userType !== 'admin') {
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+  
+  try {
+    const period = c.req.query('period') || 'day'
+    
+    // Compter les utilisateurs
+    const totalUsers = await DB.prepare('SELECT COUNT(*) as count FROM users').first()
+    
+    // Compter les voyants
+    const totalAgents = await DB.prepare('SELECT COUNT(*) as count FROM agents WHERE is_active = 1').first()
+    
+    // Compter les voyants en ligne
+    const agentsOnline = await DB.prepare('SELECT COUNT(*) as count FROM agents WHERE is_online = 1').first()
+    
+    // Visites du jour
+    const visits = await DB.prepare(`
+      SELECT page_views FROM visit_stats 
+      WHERE visit_date = date('now')
+    `).first()
+    
+    // Données pour le graphique (simplifiée pour MVP)
+    let chartData = []
+    if (period === 'day') {
+      // Dernières 24 heures
+      for (let i = 23; i >= 0; i--) {
+        chartData.push({
+          label: `${i}h`,
+          value: Math.floor(Math.random() * 100) // Mock data pour MVP
+        })
+      }
+    } else if (period === 'month') {
+      // Dernier mois
+      for (let i = 30; i >= 0; i--) {
+        const date = new Date()
+        date.setDate(date.getDate() - i)
+        chartData.push({
+          label: date.getDate().toString(),
+          value: Math.floor(Math.random() * 500)
+        })
+      }
+    } else {
+      // Dernière année
+      for (let i = 11; i >= 0; i--) {
+        const date = new Date()
+        date.setMonth(date.getMonth() - i)
+        chartData.push({
+          label: date.toLocaleDateString('fr-FR', { month: 'short' }),
+          value: Math.floor(Math.random() * 2000)
+        })
+      }
+    }
+    
+    return c.json({
+      visits: (visits?.page_views as number) || 0,
+      totalUsers: (totalUsers?.count as number) || 0,
+      totalAgents: (totalAgents?.count as number) || 0,
+      agentsOnline: (agentsOnline?.count as number) || 0,
+      chartData
+    })
+  } catch (error) {
+    console.error('Error fetching stats:', error)
+    return c.json({ error: 'Erreur serveur' }, 500)
+  }
+})
+
+// API - Liste des utilisateurs
+app.get('/api/admin/users', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session || session.userType !== 'admin') {
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+  
+  try {
+    const result = await DB.prepare(`
+      SELECT id, email, nom, prenom, telephone, created_at, last_login, is_active
+      FROM users
+      ORDER BY created_at DESC
+    `).all()
+    
+    return c.json(result.results || [])
+  } catch (error) {
+    console.error('Error:', error)
+    return c.json({ error: 'Erreur serveur' }, 500)
+  }
+})
+
+// API - Supprimer un utilisateur
+app.delete('/api/admin/users/:id', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session || session.userType !== 'admin') {
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+  
+  try {
+    const id = c.req.param('id')
+    await DB.prepare('DELETE FROM users WHERE id = ?').bind(id).run()
+    return c.json({ success: true })
+  } catch (error) {
+    console.error('Error:', error)
+    return c.json({ error: 'Erreur serveur' }, 500)
+  }
+})
+
+// API - Liste des voyants
+app.get('/api/admin/agents', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session || session.userType !== 'admin') {
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+  
+  try {
+    const result = await DB.prepare(`
+      SELECT id, email, nom, prenom, specialite, description, tarif_minute, is_online, is_active, created_at
+      FROM agents
+      ORDER BY created_at DESC
+    `).all()
+    
+    return c.json(result.results || [])
+  } catch (error) {
+    console.error('Error:', error)
+    return c.json({ error: 'Erreur serveur' }, 500)
+  }
+})
+
+// API - Créer un voyant
+app.post('/api/admin/agents', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session || session.userType !== 'admin') {
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+  
+  try {
+    const body = await c.req.json()
+    const { email, password, nom, prenom, specialite, tarif_minute, description } = body
+    
+    // Vérifier si l'email existe déjà
+    const existing = await DB.prepare('SELECT id FROM agents WHERE email = ?')
+      .bind(email)
+      .first()
+    
+    if (existing) {
+      return c.json({ error: 'Cet email est déjà utilisé' }, 400)
+    }
+    
+    const hashedPassword = hashPassword(password)
+    
+    await DB.prepare(`
+      INSERT INTO agents (email, password, nom, prenom, specialite, tarif_minute, description)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(email, hashedPassword, nom, prenom, specialite || null, tarif_minute || 0, description || null).run()
+    
+    return c.json({ success: true })
+  } catch (error) {
+    console.error('Error:', error)
+    return c.json({ error: 'Erreur serveur' }, 500)
+  }
+})
+
+// API - Mettre à jour un voyant
+app.patch('/api/admin/agents/:id', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session || session.userType !== 'admin') {
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+  
+  try {
+    const id = c.req.param('id')
+    const body = await c.req.json()
+    const { is_active } = body
+    
+    await DB.prepare('UPDATE agents SET is_active = ? WHERE id = ?')
+      .bind(is_active, id)
+      .run()
+    
+    return c.json({ success: true })
+  } catch (error) {
+    console.error('Error:', error)
+    return c.json({ error: 'Erreur serveur' }, 500)
+  }
+})
+
+// API - Supprimer un voyant
+app.delete('/api/admin/agents/:id', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session || session.userType !== 'admin') {
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+  
+  try {
+    const id = c.req.param('id')
+    await DB.prepare('DELETE FROM agents WHERE id = ?').bind(id).run()
+    return c.json({ success: true })
+  } catch (error) {
+    console.error('Error:', error)
+    return c.json({ error: 'Erreur serveur' }, 500)
+  }
+})
+
+// API - Liste des avis (admin)
+app.get('/api/admin/reviews', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session || session.userType !== 'admin') {
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+  
+  try {
+    const result = await DB.prepare(`
+      SELECT r.*, a.prenom as agent_prenom, a.nom as agent_nom
+      FROM reviews r
+      LEFT JOIN agents a ON r.agent_id = a.id
+      ORDER BY r.created_at DESC
+    `).all()
+    
+    return c.json(result.results || [])
+  } catch (error) {
+    console.error('Error:', error)
+    return c.json({ error: 'Erreur serveur' }, 500)
+  }
+})
+
+// API - Créer un avis
+app.post('/api/admin/reviews', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session || session.userType !== 'admin') {
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+  
+  try {
+    const body = await c.req.json()
+    const { user_name, agent_id, rating, comment, created_by_admin, is_visible } = body
+    
+    await DB.prepare(`
+      INSERT INTO reviews (user_name, agent_id, rating, comment, created_by_admin, is_visible)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(user_name, agent_id || null, rating, comment, created_by_admin || 0, is_visible !== undefined ? is_visible : 1).run()
+    
+    return c.json({ success: true })
+  } catch (error) {
+    console.error('Error:', error)
+    return c.json({ error: 'Erreur serveur' }, 500)
+  }
+})
+
+// API - Mettre à jour un avis
+app.patch('/api/admin/reviews/:id', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session || session.userType !== 'admin') {
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+  
+  try {
+    const id = c.req.param('id')
+    const body = await c.req.json()
+    const { is_visible } = body
+    
+    await DB.prepare('UPDATE reviews SET is_visible = ? WHERE id = ?')
+      .bind(is_visible, id)
+      .run()
+    
+    return c.json({ success: true })
+  } catch (error) {
+    console.error('Error:', error)
+    return c.json({ error: 'Erreur serveur' }, 500)
+  }
+})
+
+// API - Supprimer un avis
+app.delete('/api/admin/reviews/:id', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session || session.userType !== 'admin') {
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+  
+  try {
+    const id = c.req.param('id')
+    await DB.prepare('DELETE FROM reviews WHERE id = ?').bind(id).run()
+    return c.json({ success: true })
+  } catch (error) {
+    console.error('Error:', error)
+    return c.json({ error: 'Erreur serveur' }, 500)
+  }
 })
 
 // Pages légales

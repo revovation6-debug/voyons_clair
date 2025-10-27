@@ -559,11 +559,670 @@ export function adminDashboard(adminData: any) {
   `;
 }
 
-// Fonctions pour les autres dashboards (à compléter)
+// Dashboard Voyant
 export function agentDashboard(agentData: any) {
-  return '<h1>Dashboard Voyant - En développement</h1>';
+  return `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Voyant - Voyance Premium</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+      body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+      .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+      .chat-container { height: 500px; overflow-y: auto; }
+      .message-user { background: #e5e7eb; }
+      .message-agent { background: #ddd6fe; }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <!-- Header -->
+    <header class="gradient-bg text-white shadow-lg">
+        <div class="container mx-auto px-6 py-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-4">
+                    <i class="fas fa-user-tie text-3xl"></i>
+                    <div>
+                        <h1 class="text-2xl font-bold">Dashboard Voyant</h1>
+                        <p class="text-sm opacity-90">Bienvenue ${agentData.prenom} ${agentData.nom}</p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <button onclick="toggleOnlineStatus()" id="status-btn" class="bg-green-500 hover:bg-green-600 px-4 py-2 rounded-lg transition">
+                        <i class="fas fa-circle mr-2"></i>
+                        <span id="status-text">${agentData.is_online ? 'En ligne' : 'Hors ligne'}</span>
+                    </button>
+                    <a href="/" class="hover:text-purple-200 transition">
+                        <i class="fas fa-home mr-2"></i>Accueil
+                    </a>
+                    <button onclick="logout()" class="bg-red-500 hover:bg-red-600 px-4 py-2 rounded-lg transition">
+                        <i class="fas fa-sign-out-alt mr-2"></i>Déconnexion
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="container mx-auto px-6 py-8">
+        <!-- Statistiques -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-500 text-sm">Consultations</p>
+                        <p id="stat-sessions" class="text-3xl font-bold text-purple-600">-</p>
+                    </div>
+                    <i class="fas fa-comments text-purple-600 text-3xl"></i>
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-500 text-sm">Chiffre d'affaires</p>
+                        <p id="stat-revenue" class="text-3xl font-bold text-green-600">-</p>
+                    </div>
+                    <i class="fas fa-euro-sign text-green-600 text-3xl"></i>
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-500 text-sm">Sessions Actives</p>
+                        <p id="stat-active" class="text-3xl font-bold text-orange-600">-</p>
+                    </div>
+                    <i class="fas fa-clock text-orange-600 text-3xl"></i>
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-500 text-sm">Durée Moy.</p>
+                        <p id="stat-duration" class="text-3xl font-bold text-blue-600">-</p>
+                    </div>
+                    <i class="fas fa-hourglass-half text-blue-600 text-3xl"></i>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Liste des sessions actives -->
+            <div class="lg:col-span-1 bg-white rounded-lg shadow-lg p-6">
+                <h3 class="text-xl font-bold mb-4">Clients en attente</h3>
+                <div id="sessions-list" class="space-y-2">
+                    <p class="text-center text-gray-500">Aucun client...</p>
+                </div>
+            </div>
+
+            <!-- Zone de chat -->
+            <div class="lg:col-span-2 bg-white rounded-lg shadow-lg p-6">
+                <div id="no-chat" class="text-center py-20">
+                    <i class="fas fa-comments text-gray-300 text-6xl mb-4"></i>
+                    <p class="text-gray-500 text-lg">Sélectionnez un client pour commencer</p>
+                </div>
+
+                <div id="chat-area" class="hidden">
+                    <div class="flex items-center justify-between mb-4 pb-4 border-b">
+                        <div>
+                            <h3 class="text-xl font-bold" id="chat-client-name">-</h3>
+                            <p class="text-sm text-gray-500">En consultation</p>
+                        </div>
+                        <button onclick="endSession()" class="bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600">
+                            <i class="fas fa-stop mr-2"></i>Terminer
+                        </button>
+                    </div>
+
+                    <!-- Messages -->
+                    <div id="chat-messages" class="chat-container border rounded-lg p-4 mb-4 bg-gray-50">
+                        <p class="text-center text-gray-500">Chargement...</p>
+                    </div>
+
+                    <!-- Input -->
+                    <form id="message-form" class="flex space-x-2">
+                        <input type="text" id="message-input" placeholder="Votre message..." 
+                               class="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500">
+                        <button type="submit" class="bg-purple-600 text-white px-6 py-2 rounded-lg hover:bg-purple-700">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+    <script>
+      let currentSessionId = null;
+      let lastMessageId = 0;
+      let pollingInterval = null;
+      let isOnline = ${agentData.is_online};
+
+      // Charger stats
+      async function loadStats() {
+        try {
+          const response = await axios.get('/api/agent/stats');
+          const stats = response.data;
+          
+          document.getElementById('stat-sessions').textContent = stats.totalSessions;
+          document.getElementById('stat-revenue').textContent = stats.totalRevenue.toFixed(2) + '€';
+          document.getElementById('stat-active').textContent = stats.activeSessions;
+          document.getElementById('stat-duration').textContent = stats.avgDuration + 'min';
+        } catch (error) {
+          console.error('Erreur:', error);
+        }
+      }
+
+      // Charger sessions actives
+      async function loadSessions() {
+        try {
+          const response = await axios.get('/api/agent/sessions');
+          const sessions = response.data;
+          
+          const container = document.getElementById('sessions-list');
+          
+          if (sessions.length === 0) {
+            container.innerHTML = '<p class="text-center text-gray-500">Aucun client...</p>';
+            return;
+          }
+          
+          container.innerHTML = sessions.map(session => \`
+            <div class="p-3 border rounded-lg hover:bg-purple-50 cursor-pointer transition" 
+                 onclick="openChat(\${session.id}, '\${session.user_prenom} \${session.user_nom}')">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-2">
+                  <i class="fas fa-user-circle text-purple-600 text-2xl"></i>
+                  <div>
+                    <p class="font-semibold">\${session.user_prenom} \${session.user_nom}</p>
+                    <p class="text-xs text-gray-500">\${new Date(session.started_at).toLocaleTimeString()}</p>
+                  </div>
+                </div>
+                <i class="fas fa-chevron-right text-gray-400"></i>
+              </div>
+            </div>
+          \`).join('');
+        } catch (error) {
+          console.error('Erreur:', error);
+        }
+      }
+
+      // Ouvrir un chat
+      function openChat(sessionId, clientName) {
+        currentSessionId = sessionId;
+        lastMessageId = 0;
+        
+        document.getElementById('no-chat').classList.add('hidden');
+        document.getElementById('chat-area').classList.remove('hidden');
+        document.getElementById('chat-client-name').textContent = clientName;
+        
+        loadMessages();
+        
+        // Démarrer le polling
+        if (pollingInterval) clearInterval(pollingInterval);
+        pollingInterval = setInterval(loadMessages, 3000);
+      }
+
+      // Charger messages
+      async function loadMessages() {
+        if (!currentSessionId) return;
+        
+        try {
+          const response = await axios.get(\`/api/chat/messages/\${currentSessionId}?lastMessageId=\${lastMessageId}\`);
+          const data = response.data;
+          
+          const container = document.getElementById('chat-messages');
+          
+          if (data.messages.length > 0) {
+            data.messages.forEach(msg => {
+              const messageDiv = document.createElement('div');
+              messageDiv.className = \`p-3 rounded-lg mb-2 \${msg.sender_type === 'agent' ? 'message-agent ml-auto' : 'message-user mr-auto'} max-w-md\`;
+              messageDiv.innerHTML = \`
+                <p class="text-xs text-gray-600 mb-1">\${msg.sender_name} - \${new Date(msg.created_at).toLocaleTimeString()}</p>
+                <p>\${msg.message}</p>
+              \`;
+              container.appendChild(messageDiv);
+              lastMessageId = msg.id;
+            });
+            
+            // Scroll to bottom
+            container.scrollTop = container.scrollHeight;
+          }
+        } catch (error) {
+          console.error('Erreur:', error);
+        }
+      }
+
+      // Envoyer message
+      document.getElementById('message-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const input = document.getElementById('message-input');
+        const message = input.value.trim();
+        
+        if (!message || !currentSessionId) return;
+        
+        try {
+          await axios.post('/api/chat/message', {
+            chat_session_id: currentSessionId,
+            message: message
+          });
+          
+          input.value = '';
+          loadMessages();
+        } catch (error) {
+          alert('Erreur lors de l\\'envoi');
+        }
+      });
+
+      // Terminer session
+      async function endSession() {
+        if (!currentSessionId || !confirm('Terminer cette consultation ?')) return;
+        
+        try {
+          const response = await axios.post('/api/chat/end', {
+            chat_session_id: currentSessionId
+          });
+          
+          alert(\`Consultation terminée\\nDurée: \${response.data.duration_minutes}min\\nCoût: \${response.data.total_cost.toFixed(2)}€\`);
+          
+          if (pollingInterval) clearInterval(pollingInterval);
+          
+          document.getElementById('chat-area').classList.add('hidden');
+          document.getElementById('no-chat').classList.remove('hidden');
+          currentSessionId = null;
+          
+          loadStats();
+          loadSessions();
+        } catch (error) {
+          alert('Erreur lors de la fermeture');
+        }
+      }
+
+      // Toggle online status
+      async function toggleOnlineStatus() {
+        try {
+          isOnline = !isOnline;
+          const statusBtn = document.getElementById('status-btn');
+          const statusText = document.getElementById('status-text');
+          
+          // Mise à jour visuelle immédiate
+          if (isOnline) {
+            statusBtn.classList.remove('bg-gray-500');
+            statusBtn.classList.add('bg-green-500');
+            statusText.textContent = 'En ligne';
+          } else {
+            statusBtn.classList.remove('bg-green-500');
+            statusBtn.classList.add('bg-gray-500');
+            statusText.textContent = 'Hors ligne';
+          }
+          
+          // TODO: Appeler API pour mettre à jour le statut en DB
+        } catch (error) {
+          console.error('Erreur:', error);
+        }
+      }
+
+      // Déconnexion
+      async function logout() {
+        try {
+          await axios.post('/api/auth/logout');
+          window.location.href = '/';
+        } catch (error) {
+          window.location.href = '/';
+        }
+      }
+
+      // Init
+      loadStats();
+      loadSessions();
+      setInterval(loadSessions, 5000); // Rafraîchir les sessions toutes les 5s
+    </script>
+</body>
+</html>
+  `;
 }
 
+// Dashboard Client
 export function clientDashboard(clientData: any) {
-  return '<h1>Dashboard Client - En développement</h1>';
+  return `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Client - Voyance Premium</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+      body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+      .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+      .chat-container { height: 500px; overflow-y: auto; }
+      .message-user { background: #ddd6fe; }
+      .message-agent { background: #e5e7eb; }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <!-- Header -->
+    <header class="gradient-bg text-white shadow-lg">
+        <div class="container mx-auto px-6 py-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-4">
+                    <i class="fas fa-user text-3xl"></i>
+                    <div>
+                        <h1 class="text-2xl font-bold">Mon Espace Client</h1>
+                        <p class="text-sm opacity-90">Bienvenue ${clientData.prenom} ${clientData.nom}</p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <a href="/" class="hover:text-purple-200 transition">
+                        <i class="fas fa-home mr-2"></i>Accueil
+                    </a>
+                    <button onclick="logout()" class="bg-red-500 hover:bg-red-600 px-4 py-2 rounded-lg transition">
+                        <i class="fas fa-sign-out-alt mr-2"></i>Déconnexion
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="container mx-auto px-6 py-8">
+        <!-- Onglets -->
+        <div class="mb-6 border-b border-gray-300">
+            <nav class="flex space-x-4">
+                <button onclick="showTab('experts')" id="tab-experts" class="tab-btn px-4 py-2 font-semibold border-b-2 border-purple-600 text-purple-600">
+                    <i class="fas fa-users mr-2"></i>Nos Voyants
+                </button>
+                <button onclick="showTab('chat')" id="tab-chat" class="tab-btn px-4 py-2 font-semibold text-gray-600 hover:text-purple-600 hidden">
+                    <i class="fas fa-comments mr-2"></i>Consultation
+                </button>
+                <button onclick="showTab('history')" id="tab-history" class="tab-btn px-4 py-2 font-semibold text-gray-600 hover:text-purple-600">
+                    <i class="fas fa-history mr-2"></i>Historique
+                </button>
+            </nav>
+        </div>
+
+        <!-- Onglet Voyants -->
+        <div id="content-experts" class="tab-content">
+            <h2 class="text-2xl font-bold mb-6">Choisissez votre voyant</h2>
+            <div id="experts-list" class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <p class="text-center text-gray-500">Chargement...</p>
+            </div>
+        </div>
+
+        <!-- Onglet Chat -->
+        <div id="content-chat" class="tab-content hidden">
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <div class="flex items-center justify-between mb-4 pb-4 border-b">
+                    <div class="flex items-center space-x-4">
+                        <div class="w-16 h-16 bg-purple-200 rounded-full flex items-center justify-center">
+                            <i class="fas fa-user text-purple-600 text-2xl"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-xl font-bold" id="chat-agent-name">-</h3>
+                            <p class="text-sm text-gray-500" id="chat-agent-specialite">-</p>
+                            <p class="text-sm text-purple-600 font-semibold" id="chat-agent-tarif">-</p>
+                        </div>
+                    </div>
+                    <button onclick="endConsultation()" class="bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600">
+                        <i class="fas fa-stop mr-2"></i>Terminer
+                    </button>
+                </div>
+
+                <!-- Messages -->
+                <div id="chat-messages" class="chat-container border rounded-lg p-4 mb-4 bg-gray-50">
+                    <p class="text-center text-gray-500">Chargement...</p>
+                </div>
+
+                <!-- Input -->
+                <form id="message-form" class="flex space-x-2">
+                    <input type="text" id="message-input" placeholder="Votre message..." 
+                           class="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500">
+                    <button type="submit" class="bg-purple-600 text-white px-6 py-2 rounded-lg hover:bg-purple-700">
+                        <i class="fas fa-paper-plane"></i>
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Onglet Historique -->
+        <div id="content-history" class="tab-content hidden">
+            <h2 class="text-2xl font-bold mb-6">Mes consultations</h2>
+            <div id="history-list" class="space-y-4">
+                <p class="text-center text-gray-500">Chargement...</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+    <script>
+      let currentSessionId = null;
+      let currentAgent = null;
+      let lastMessageId = 0;
+      let pollingInterval = null;
+
+      // Onglets
+      function showTab(tab) {
+        document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+        document.querySelectorAll('.tab-btn').forEach(el => {
+          el.classList.remove('border-purple-600', 'text-purple-600');
+          el.classList.add('text-gray-600');
+        });
+        
+        document.getElementById('content-' + tab).classList.remove('hidden');
+        document.getElementById('tab-' + tab).classList.add('border-purple-600', 'text-purple-600');
+        
+        if (tab === 'experts') loadExperts();
+        else if (tab === 'history') loadHistory();
+      }
+
+      // Charger experts
+      async function loadExperts() {
+        try {
+          const response = await axios.get('/api/experts');
+          const experts = response.data;
+          
+          const container = document.getElementById('experts-list');
+          
+          container.innerHTML = experts.map(expert => \`
+            <div class="bg-white rounded-lg shadow-lg p-6">
+              <div class="flex flex-col items-center">
+                <div class="w-24 h-24 bg-purple-200 rounded-full flex items-center justify-center mb-4">
+                  <i class="fas fa-user text-purple-600 text-4xl"></i>
+                </div>
+                <h3 class="text-xl font-bold mb-2">\${expert.prenom} \${expert.nom}</h3>
+                <p class="text-purple-600 font-semibold mb-2">\${expert.specialite || 'Voyance'}</p>
+                <p class="text-gray-600 text-sm mb-4 text-center">\${expert.description || 'Expert en voyance'}</p>
+                <div class="flex items-center mb-4">
+                  <span class="text-2xl font-bold text-purple-700">\${expert.tarif_minute}€</span>
+                  <span class="text-gray-500 ml-1">/min</span>
+                </div>
+                <div class="mb-4">
+                  \${expert.is_online ? 
+                    '<span class="bg-green-100 text-green-700 px-3 py-1 rounded-full text-sm font-semibold"><i class="fas fa-circle text-xs mr-1"></i> En ligne</span>' : 
+                    '<span class="bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-sm font-semibold"><i class="fas fa-circle text-xs mr-1"></i> Hors ligne</span>'
+                  }
+                </div>
+                <button onclick='startChat(\${JSON.stringify(expert)})' 
+                        class="bg-purple-600 text-white px-6 py-2 rounded-lg hover:bg-purple-700 transition font-semibold w-full \${!expert.is_online ? 'opacity-50 cursor-not-allowed' : ''}"
+                        \${!expert.is_online ? 'disabled' : ''}>
+                  <i class="fas fa-comments mr-2"></i>Consulter
+                </button>
+              </div>
+            </div>
+          \`).join('');
+        } catch (error) {
+          console.error('Erreur:', error);
+        }
+      }
+
+      // Démarrer consultation
+      async function startChat(agent) {
+        if (!agent.is_online) {
+          alert('Ce voyant n\\'est pas disponible actuellement');
+          return;
+        }
+        
+        try {
+          const response = await axios.post('/api/chat/start', {
+            agent_id: agent.id
+          });
+          
+          currentSessionId = response.data.chatSessionId;
+          currentAgent = agent;
+          lastMessageId = 0;
+          
+          document.getElementById('chat-agent-name').textContent = \`\${agent.prenom} \${agent.nom}\`;
+          document.getElementById('chat-agent-specialite').textContent = agent.specialite || 'Voyance';
+          document.getElementById('chat-agent-tarif').textContent = \`\${agent.tarif_minute}€/min\`;
+          
+          document.getElementById('tab-chat').classList.remove('hidden');
+          showTab('chat');
+          
+          loadMessages();
+          
+          // Démarrer polling
+          if (pollingInterval) clearInterval(pollingInterval);
+          pollingInterval = setInterval(loadMessages, 3000);
+        } catch (error) {
+          alert('Erreur lors du démarrage');
+        }
+      }
+
+      // Charger messages
+      async function loadMessages() {
+        if (!currentSessionId) return;
+        
+        try {
+          const response = await axios.get(\`/api/chat/messages/\${currentSessionId}?lastMessageId=\${lastMessageId}\`);
+          const data = response.data;
+          
+          const container = document.getElementById('chat-messages');
+          
+          if (lastMessageId === 0) {
+            container.innerHTML = ''; // Clear on first load
+          }
+          
+          if (data.messages.length > 0) {
+            data.messages.forEach(msg => {
+              const messageDiv = document.createElement('div');
+              messageDiv.className = \`p-3 rounded-lg mb-2 \${msg.sender_type === 'user' ? 'message-user ml-auto' : 'message-agent mr-auto'} max-w-md\`;
+              messageDiv.innerHTML = \`
+                <p class="text-xs text-gray-600 mb-1">\${msg.sender_name} - \${new Date(msg.created_at).toLocaleTimeString()}</p>
+                <p>\${msg.message}</p>
+              \`;
+              container.appendChild(messageDiv);
+              lastMessageId = msg.id;
+            });
+            
+            container.scrollTop = container.scrollHeight;
+          }
+        } catch (error) {
+          console.error('Erreur:', error);
+        }
+      }
+
+      // Envoyer message
+      document.getElementById('message-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const input = document.getElementById('message-input');
+        const message = input.value.trim();
+        
+        if (!message || !currentSessionId) return;
+        
+        try {
+          await axios.post('/api/chat/message', {
+            chat_session_id: currentSessionId,
+            message: message
+          });
+          
+          input.value = '';
+          loadMessages();
+        } catch (error) {
+          alert('Erreur lors de l\\'envoi');
+        }
+      });
+
+      // Terminer consultation
+      async function endConsultation() {
+        if (!currentSessionId || !confirm('Terminer cette consultation ?')) return;
+        
+        try {
+          const response = await axios.post('/api/chat/end', {
+            chat_session_id: currentSessionId
+          });
+          
+          alert(\`Consultation terminée\\nDurée: \${response.data.duration_minutes} minute(s)\\nMontant: \${response.data.total_cost.toFixed(2)}€\`);
+          
+          if (pollingInterval) clearInterval(pollingInterval);
+          
+          currentSessionId = null;
+          currentAgent = null;
+          lastMessageId = 0;
+          
+          document.getElementById('tab-chat').classList.add('hidden');
+          showTab('history');
+        } catch (error) {
+          alert('Erreur lors de la fermeture');
+        }
+      }
+
+      // Charger historique
+      async function loadHistory() {
+        try {
+          const response = await axios.get('/api/client/sessions');
+          const sessions = response.data;
+          
+          const container = document.getElementById('history-list');
+          
+          if (sessions.length === 0) {
+            container.innerHTML = '<p class="text-center text-gray-500">Aucune consultation</p>';
+            return;
+          }
+          
+          container.innerHTML = sessions.map(session => \`
+            <div class="bg-white rounded-lg shadow-lg p-6">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-4">
+                  <div class="w-12 h-12 bg-purple-200 rounded-full flex items-center justify-center">
+                    <i class="fas fa-user text-purple-600"></i>
+                  </div>
+                  <div>
+                    <h4 class="font-bold">\${session.agent_prenom} \${session.agent_nom}</h4>
+                    <p class="text-sm text-gray-500">\${session.specialite || 'Voyance'}</p>
+                    <p class="text-xs text-gray-400">\${new Date(session.started_at).toLocaleString()}</p>
+                  </div>
+                </div>
+                <div class="text-right">
+                  <p class="text-sm text-gray-600">Durée: \${session.duration_minutes || 0}min</p>
+                  <p class="text-lg font-bold text-purple-600">\${session.total_cost ? session.total_cost.toFixed(2) + '€' : 'En cours'}</p>
+                  <span class="text-xs px-2 py-1 rounded \${session.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}">
+                    \${session.status === 'active' ? 'Active' : 'Terminée'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          \`).join('');
+        } catch (error) {
+          console.error('Erreur:', error);
+        }
+      }
+
+      // Déconnexion
+      async function logout() {
+        try {
+          await axios.post('/api/auth/logout');
+          window.location.href = '/';
+        } catch (error) {
+          window.location.href = '/';
+        }
+      }
+
+      // Init
+      loadExperts();
+    </script>
+</body>
+</html>
+  `;
 }

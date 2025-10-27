@@ -822,6 +822,322 @@ app.delete('/api/admin/reviews/:id', async (c) => {
   }
 })
 
+// ============================================
+// API CHAT SYSTEM
+// ============================================
+
+// API - Créer/Démarrer une session de chat
+app.post('/api/chat/start', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session || session.userType !== 'user') {
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+  
+  try {
+    const body = await c.req.json()
+    const { agent_id } = body
+    
+    // Vérifier si l'agent existe et est disponible
+    const agent = await DB.prepare('SELECT * FROM agents WHERE id = ? AND is_active = 1')
+      .bind(agent_id)
+      .first()
+    
+    if (!agent) {
+      return c.json({ error: 'Voyant non disponible' }, 400)
+    }
+    
+    // Créer la session de chat
+    const result = await DB.prepare(`
+      INSERT INTO chat_sessions (user_id, agent_id, status, started_at)
+      VALUES (?, ?, 'active', datetime('now'))
+    `).bind(session.userId, agent_id).run()
+    
+    const chatSessionId = result.meta.last_row_id
+    
+    // Message de bienvenue automatique
+    await DB.prepare(`
+      INSERT INTO messages (chat_session_id, sender_type, sender_id, message)
+      VALUES (?, 'agent', ?, ?)
+    `).bind(
+      chatSessionId, 
+      agent_id, 
+      `Bonjour ! Je suis ${agent.prenom}, bienvenue dans votre consultation. Comment puis-je vous aider aujourd'hui ?`
+    ).run()
+    
+    return c.json({ 
+      success: true, 
+      chatSessionId,
+      agent: {
+        id: agent.id,
+        nom: agent.nom,
+        prenom: agent.prenom,
+        specialite: agent.specialite,
+        tarif_minute: agent.tarif_minute
+      }
+    })
+  } catch (error) {
+    console.error('Error starting chat:', error)
+    return c.json({ error: 'Erreur lors du démarrage' }, 500)
+  }
+})
+
+// API - Envoyer un message
+app.post('/api/chat/message', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session) {
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+  
+  try {
+    const body = await c.req.json()
+    const { chat_session_id, message } = body
+    
+    // Vérifier que la session existe et appartient à l'utilisateur
+    const chatSession = await DB.prepare(`
+      SELECT * FROM chat_sessions 
+      WHERE id = ? AND (user_id = ? OR agent_id = ?) AND status = 'active'
+    `).bind(chat_session_id, session.userId, session.userId).first()
+    
+    if (!chatSession) {
+      return c.json({ error: 'Session invalide' }, 400)
+    }
+    
+    // Insérer le message
+    const result = await DB.prepare(`
+      INSERT INTO messages (chat_session_id, sender_type, sender_id, message, created_at)
+      VALUES (?, ?, ?, ?, datetime('now'))
+    `).bind(
+      chat_session_id,
+      session.userType === 'agent' ? 'agent' : 'user',
+      session.userId,
+      message
+    ).run()
+    
+    return c.json({ 
+      success: true,
+      messageId: result.meta.last_row_id
+    })
+  } catch (error) {
+    console.error('Error sending message:', error)
+    return c.json({ error: 'Erreur lors de l\'envoi' }, 500)
+  }
+})
+
+// API - Récupérer les messages (polling)
+app.get('/api/chat/messages/:sessionId', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session) {
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+  
+  try {
+    const sessionId = c.req.param('sessionId')
+    const lastMessageId = c.req.query('lastMessageId') || '0'
+    
+    // Vérifier l'accès à la session
+    const chatSession = await DB.prepare(`
+      SELECT * FROM chat_sessions 
+      WHERE id = ? AND (user_id = ? OR agent_id = ?)
+    `).bind(sessionId, session.userId, session.userId).first()
+    
+    if (!chatSession) {
+      return c.json({ error: 'Session invalide' }, 401)
+    }
+    
+    // Récupérer les nouveaux messages
+    const messages = await DB.prepare(`
+      SELECT m.*, 
+        CASE 
+          WHEN m.sender_type = 'user' THEN u.prenom || ' ' || u.nom
+          WHEN m.sender_type = 'agent' THEN a.prenom || ' ' || a.nom
+        END as sender_name
+      FROM messages m
+      LEFT JOIN users u ON m.sender_type = 'user' AND m.sender_id = u.id
+      LEFT JOIN agents a ON m.sender_type = 'agent' AND m.sender_id = a.id
+      WHERE m.chat_session_id = ? AND m.id > ?
+      ORDER BY m.created_at ASC
+    `).bind(sessionId, lastMessageId).all()
+    
+    // Marquer comme lu
+    if (messages.results && messages.results.length > 0) {
+      await DB.prepare(`
+        UPDATE messages 
+        SET is_read = 1 
+        WHERE chat_session_id = ? AND sender_type != ?
+      `).bind(sessionId, session.userType === 'agent' ? 'agent' : 'user').run()
+    }
+    
+    return c.json({ 
+      messages: messages.results || [],
+      session: {
+        status: chatSession.status,
+        duration_minutes: chatSession.duration_minutes,
+        total_cost: chatSession.total_cost
+      }
+    })
+  } catch (error) {
+    console.error('Error fetching messages:', error)
+    return c.json({ error: 'Erreur serveur' }, 500)
+  }
+})
+
+// API - Terminer une session de chat
+app.post('/api/chat/end', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session) {
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+  
+  try {
+    const body = await c.req.json()
+    const { chat_session_id } = body
+    
+    // Récupérer la session
+    const chatSession = await DB.prepare(`
+      SELECT cs.*, a.tarif_minute
+      FROM chat_sessions cs
+      JOIN agents a ON cs.agent_id = a.id
+      WHERE cs.id = ? AND (cs.user_id = ? OR cs.agent_id = ?)
+    `).bind(chat_session_id, session.userId, session.userId).first()
+    
+    if (!chatSession) {
+      return c.json({ error: 'Session invalide' }, 400)
+    }
+    
+    // Calculer la durée et le coût
+    const startTime = new Date(chatSession.started_at as string).getTime()
+    const endTime = Date.now()
+    const durationMs = endTime - startTime
+    const durationMinutes = Math.ceil(durationMs / 60000) // Arrondir à la minute supérieure
+    const totalCost = durationMinutes * (chatSession.tarif_minute as number)
+    
+    // Mettre à jour la session
+    await DB.prepare(`
+      UPDATE chat_sessions 
+      SET status = 'closed', 
+          ended_at = datetime('now'),
+          duration_minutes = ?,
+          total_cost = ?
+      WHERE id = ?
+    `).bind(durationMinutes, totalCost, chat_session_id).run()
+    
+    // Créer la transaction
+    await DB.prepare(`
+      INSERT INTO transactions (user_id, agent_id, chat_session_id, amount, transaction_date, status)
+      VALUES (?, ?, ?, ?, datetime('now'), 'completed')
+    `).bind(chatSession.user_id, chatSession.agent_id, chat_session_id, totalCost).run()
+    
+    return c.json({ 
+      success: true,
+      duration_minutes: durationMinutes,
+      total_cost: totalCost
+    })
+  } catch (error) {
+    console.error('Error ending chat:', error)
+    return c.json({ error: 'Erreur lors de la fermeture' }, 500)
+  }
+})
+
+// API - Liste des sessions actives (pour voyant)
+app.get('/api/agent/sessions', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session || session.userType !== 'agent') {
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+  
+  try {
+    const sessions = await DB.prepare(`
+      SELECT cs.*, u.prenom as user_prenom, u.nom as user_nom
+      FROM chat_sessions cs
+      JOIN users u ON cs.user_id = u.id
+      WHERE cs.agent_id = ? AND cs.status = 'active'
+      ORDER BY cs.started_at DESC
+    `).bind(session.userId).all()
+    
+    return c.json(sessions.results || [])
+  } catch (error) {
+    console.error('Error:', error)
+    return c.json({ error: 'Erreur serveur' }, 500)
+  }
+})
+
+// API - Historique des sessions (pour client)
+app.get('/api/client/sessions', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session || session.userType !== 'user') {
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+  
+  try {
+    const sessions = await DB.prepare(`
+      SELECT cs.*, a.prenom as agent_prenom, a.nom as agent_nom, a.specialite
+      FROM chat_sessions cs
+      JOIN agents a ON cs.agent_id = a.id
+      WHERE cs.user_id = ?
+      ORDER BY cs.started_at DESC
+    `).bind(session.userId).all()
+    
+    return c.json(sessions.results || [])
+  } catch (error) {
+    console.error('Error:', error)
+    return c.json({ error: 'Erreur serveur' }, 500)
+  }
+})
+
+// API - Statistiques voyant
+app.get('/api/agent/stats', async (c) => {
+  const { DB } = c.env
+  const session = getSessionFromCookie(c.req.header('cookie'))
+  
+  if (!session || session.userType !== 'agent') {
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+  
+  try {
+    // Total consultations
+    const totalSessions = await DB.prepare(`
+      SELECT COUNT(*) as count FROM chat_sessions WHERE agent_id = ? AND status = 'closed'
+    `).bind(session.userId).first()
+    
+    // Chiffre d'affaires total
+    const totalRevenue = await DB.prepare(`
+      SELECT SUM(total_cost) as total FROM chat_sessions WHERE agent_id = ? AND status = 'closed'
+    `).bind(session.userId).first()
+    
+    // Sessions actives
+    const activeSessions = await DB.prepare(`
+      SELECT COUNT(*) as count FROM chat_sessions WHERE agent_id = ? AND status = 'active'
+    `).bind(session.userId).first()
+    
+    // Durée moyenne
+    const avgDuration = await DB.prepare(`
+      SELECT AVG(duration_minutes) as avg FROM chat_sessions WHERE agent_id = ? AND status = 'closed'
+    `).bind(session.userId).first()
+    
+    return c.json({
+      totalSessions: (totalSessions?.count as number) || 0,
+      totalRevenue: (totalRevenue?.total as number) || 0,
+      activeSessions: (activeSessions?.count as number) || 0,
+      avgDuration: Math.round((avgDuration?.avg as number) || 0)
+    })
+  } catch (error) {
+    console.error('Error:', error)
+    return c.json({ error: 'Erreur serveur' }, 500)
+  }
+})
+
 // Pages légales
 app.get('/contact', (c) => c.html('<h1>Page de contact - En construction</h1>'))
 app.get('/confidentialite', (c) => c.html('<h1>Politique de confidentialité - En construction</h1>'))

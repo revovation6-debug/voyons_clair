@@ -6,6 +6,7 @@ import type { Bindings } from './types'
 import { hashPassword, verifyPassword, createSession, getSessionFromCookie } from './auth'
 import { loginPage, registerPage } from './pages'
 import { adminDashboard, agentDashboard, clientDashboard } from './dashboards'
+import { waitForNewMessages, notifyNewMessage } from './realtime-chat'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -501,11 +502,25 @@ app.get('/client/dashboard', async (c) => {
     return c.redirect('/login')
   }
   
-  const user = await DB.prepare('SELECT * FROM users WHERE id = ?')
-    .bind(session.userId)
-    .first()
-  
-  return c.html(clientDashboard(user))
+  try {
+    const user = await DB.prepare('SELECT * FROM users WHERE id = ?')
+      .bind(session.userId)
+      .first()
+    
+    if (!user) {
+      return c.html('<h1>Erreur: Utilisateur non trouvé</h1><a href="/login">Retour</a>')
+    }
+    
+    const dashboard = clientDashboard(user)
+    if (!dashboard || dashboard.length === 0) {
+      return c.html('<h1>Erreur: Dashboard vide</h1><a href="/login">Retour</a>')
+    }
+    
+    return c.html(dashboard)
+  } catch (error) {
+    console.error('Error loading client dashboard:', error)
+    return c.html(`<h1>Erreur: ${error}</h1><a href="/login">Retour</a>`)
+  }
 })
 
 // ============================================
@@ -917,6 +932,9 @@ app.post('/api/chat/message', async (c) => {
       message
     ).run()
     
+    // Notifier les clients en long polling (accélère la livraison du message)
+    notifyNewMessage(chat_session_id.toString())
+    
     return c.json({ 
       success: true,
       messageId: result.meta.last_row_id
@@ -927,7 +945,7 @@ app.post('/api/chat/message', async (c) => {
   }
 })
 
-// API - Récupérer les messages (polling)
+// API - Récupérer les messages (LONG POLLING - Temps Réel)
 app.get('/api/chat/messages/:sessionId', async (c) => {
   const { DB } = c.env
   const session = getSessionFromCookie(c.req.header('cookie'))
@@ -938,7 +956,8 @@ app.get('/api/chat/messages/:sessionId', async (c) => {
   
   try {
     const sessionId = c.req.param('sessionId')
-    const lastMessageId = c.req.query('lastMessageId') || '0'
+    const lastMessageId = parseInt(c.req.query('lastMessageId') || '0')
+    const useLongPolling = c.req.query('longPoll') === 'true'
     
     // Vérifier l'accès à la session
     const chatSession = await DB.prepare(`
@@ -950,22 +969,31 @@ app.get('/api/chat/messages/:sessionId', async (c) => {
       return c.json({ error: 'Session invalide' }, 401)
     }
     
-    // Récupérer les nouveaux messages
-    const messages = await DB.prepare(`
-      SELECT m.*, 
-        CASE 
-          WHEN m.sender_type = 'user' THEN u.prenom || ' ' || u.nom
-          WHEN m.sender_type = 'agent' THEN a.prenom || ' ' || a.nom
-        END as sender_name
-      FROM messages m
-      LEFT JOIN users u ON m.sender_type = 'user' AND m.sender_id = u.id
-      LEFT JOIN agents a ON m.sender_type = 'agent' AND m.sender_id = a.id
-      WHERE m.chat_session_id = ? AND m.id > ?
-      ORDER BY m.created_at ASC
-    `).bind(sessionId, lastMessageId).all()
+    let messages: any[] = [];
+    
+    // Si long polling activé, attendre les nouveaux messages
+    if (useLongPolling) {
+      messages = await waitForNewMessages(DB, sessionId, lastMessageId, 25000);
+    } else {
+      // Polling classique: récupération immédiate
+      const result = await DB.prepare(`
+        SELECT m.*, 
+          CASE 
+            WHEN m.sender_type = 'user' THEN u.prenom || ' ' || u.nom
+            WHEN m.sender_type = 'agent' THEN a.prenom || ' ' || a.nom
+          END as sender_name
+        FROM messages m
+        LEFT JOIN users u ON m.sender_type = 'user' AND m.sender_id = u.id
+        LEFT JOIN agents a ON m.sender_type = 'agent' AND m.sender_id = a.id
+        WHERE m.chat_session_id = ? AND m.id > ?
+        ORDER BY m.created_at ASC
+      `).bind(sessionId, lastMessageId).all()
+      
+      messages = result.results || [];
+    }
     
     // Marquer comme lu
-    if (messages.results && messages.results.length > 0) {
+    if (messages.length > 0) {
       await DB.prepare(`
         UPDATE messages 
         SET is_read = 1 
@@ -974,12 +1002,13 @@ app.get('/api/chat/messages/:sessionId', async (c) => {
     }
     
     return c.json({ 
-      messages: messages.results || [],
+      messages: messages,
       session: {
         status: chatSession.status,
         duration_minutes: chatSession.duration_minutes,
         total_cost: chatSession.total_cost
-      }
+      },
+      longPolling: useLongPolling
     })
   } catch (error) {
     console.error('Error fetching messages:', error)
